@@ -8,8 +8,6 @@
 
 #ifdef _WIN64
 #include <Windows.h>
-#else
-
 #endif // __WIN64
 
 typedef struct QueueNode
@@ -28,6 +26,43 @@ typedef	struct Queue
 void queue_init(Queue* pq)
 {
     pq->head = pq->tail = NULL;
+}
+
+int queue_size(Queue* pq)
+{
+    if (pq == NULL) {
+        printf("queue_size pq is null\n");
+        return 0;
+    }
+
+    QueueNode* cur = pq->head;
+    int count = 0;
+    while (cur) {
+        cur = cur->next;
+        count++;
+    }
+    return count;
+}
+
+void queue_pop(Queue* pq)
+{
+    if (pq == NULL) {
+        printf("queue_pop pq is null\n");
+        return;
+    }
+    if (pq->head == NULL && pq->tail == NULL) {
+        printf("queue_push pq is null\n");
+    }
+
+    if (pq->head->next == NULL) {
+        free(pq->head);
+        pq->head = pq->tail = NULL;
+    } else {
+        QueueNode* next = pq->head->next;
+        free(pq->head);
+        pq->head = next;
+    }
+
 }
 
 void queue_destory(Queue* pq)
@@ -50,6 +85,10 @@ void queue_push(Queue* pq, char* data, int size)
         printf("queue_push pq is null\n");
     }
 
+    while (queue_size(pq) > 40) {
+        queue_pop(pq);
+    }
+
     QueueNode* newNode = (QueueNode*)malloc(sizeof(QueueNode));
     if (NULL == newNode) {
         printf("malloc error\n");
@@ -66,27 +105,6 @@ void queue_push(Queue* pq, char* data, int size)
         pq->tail = newNode;
     }
     //printf("增加节点%d   size:%d   %d \n", queue_size(pq), size, strlen(newNode->val));
-}
-
-void queue_pop(Queue* pq)
-{
-    if (pq == NULL) {
-        printf("queue_pop pq is null\n");
-        return ;
-    }
-    if (pq->head==NULL && pq->tail == NULL) {
-        printf("queue_push pq is null\n");
-    }
-
-    if (pq->head->next == NULL) {
-        free(pq->head);
-        pq->head = pq->tail = NULL;
-    } else {
-        QueueNode* next = pq->head->next;
-        free(pq->head);
-        pq->head = next;
-    }
-
 }
 
 int queue_empty(Queue* pq)
@@ -114,21 +132,7 @@ int queue_front(Queue* pq, char** data, int* size)
     return 1;
 }
 
-int queue_size(Queue* pq)
-{
-    if (pq == NULL) {
-        printf("queue_size pq is null\n");
-        return 0;
-    }
 
-    QueueNode* cur = pq->head;
-    int count = 0;
-    while (cur) {
-        cur = cur->next;
-        count++;
-    }
-    return count;
-}
 
 typedef void(*OnBuffer)(unsigned char* data, int size, int w, int h, int pts, int cost_time);
 
@@ -137,6 +141,7 @@ AVCodecContext* dec_ctx = NULL;
 AVCodecParserContext* parser_ctx = NULL;
 AVPacket* pkt = NULL;
 AVFrame* frame = NULL;
+AVPacket* pkt_cache = NULL;
 OnBuffer decoder_callback = NULL;
 Queue* g_queue;
 clock_t start_time = 0;
@@ -230,8 +235,11 @@ void init_decoder(long callback)
         printf("avcodec_alloc_context3 error\n");
         return;
     }
+    AVDictionary* para = NULL;
+    av_dict_set(&para, "preset", "ultrafast", 0);
+    av_dict_set(&para, "tune", "zerolatency", 0);
     // 打开decoder
-    int res = avcodec_open2(dec_ctx, codec, NULL);
+    int res = avcodec_open2(dec_ctx, codec, &para);
     if (res) {
         printf("avcodec_open2  %d  error\n", res);
         return;
@@ -241,6 +249,7 @@ void init_decoder(long callback)
     frame->format = AV_PIX_FMT_YUV420P;
     // 分配一个pkt内存
     pkt = av_packet_alloc();
+    pkt_cache = av_packet_alloc();
     // 暂存回调
     decoder_callback = (OnBuffer)callback;
     g_queue = (Queue*)malloc(sizeof(Queue));
@@ -258,10 +267,8 @@ void decode_buffer(unsigned char* buffer, int data_size) { // 入参是js传入�
         buffer += size;
         data_size -= size;
         if (pkt->size) {
-            // 解码packet
             // 送进队列
             queue_push(g_queue, pkt->data, pkt->size);
-          //  decode_packet(dec_ctx, frame, pkt);
         }
     }
 }
@@ -274,12 +281,19 @@ void close_decoder() {
     if (dec_ctx) {
         avcodec_free_context(&codec);
     }
+    
+    if (pkt_cache) {
+        av_packet_free(&pkt_cache);
+    }
+
     if (frame) {
         av_frame_free(&frame);
     }
     if (pkt) {
         av_packet_free(&pkt);
     }
+
+
     decoder_callback = NULL;
 
     queue_destory(g_queue);
@@ -287,19 +301,17 @@ void close_decoder() {
 
 int decode_one_packet()
 {
-    AVPacket *pkt = av_malloc(sizeof(AVPacket));
-    av_init_packet(pkt);
-    memset(pkt, 0, sizeof(pkt));
+    av_init_packet(pkt_cache);
     if (queue_size(g_queue) == 0)
         return 0;
 
-    if (queue_front(g_queue, &pkt->data, &pkt->size)) {
+    if (queue_front(g_queue, &pkt_cache->data, &pkt_cache->size)) {
         // 解码packet
-        decode_packet(dec_ctx, frame, pkt);
+        decode_packet(dec_ctx, frame, pkt_cache);
 
         queue_pop(g_queue);
 
-        printf("剩余缓存帧数:%d \n", queue_size(g_queue));
+       // printf("剩余缓存帧数:%d \n", queue_size(g_queue));
     }
     return 1;
 }
