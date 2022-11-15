@@ -1,15 +1,7 @@
 
-#ifdef _WIN64
-#include <Windows.h>
-#else
-#include <unistd.h>
-#include <sys/time.h>
 
-#endif // __linux
 
-#include <time.h>
-#include <stdio.h>
-#include <sys/timeb.h>
+#include "common.h"
 
 typedef void(*VideoCallback)(unsigned char* buff, int size, double timestamp,int cost);
 typedef void(*AudioCallback)(unsigned char* buff, int size, double timestamp);

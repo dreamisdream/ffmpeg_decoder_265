@@ -28,13 +28,7 @@
   * AVIOContext read callback.
   * @example avio_reading.c
   */
-extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
-#include <libavformat/avio.h>
-#include <libavutil/file.h>
-
-}
+#include "common.h"
 
 struct buffer_data {
     uint8_t* ptr;
