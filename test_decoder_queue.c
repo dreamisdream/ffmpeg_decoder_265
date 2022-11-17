@@ -6,14 +6,23 @@
 #include <libavcodec/avcodec.h>
 #include <libavutil/imgutils.h>
 
-#ifdef _WIN64
+#if (defined _WIN32 || defined _WIN64)
 #include <Windows.h>
+#include <thread>
+#include <mutex>
+using namespace std;
+recursive_mutex mtx;
+#else
+
+#include <pthread.h>
+pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
 #endif // __WIN64
 
 typedef struct QueueNode
 {
     char val[200 * 1000];
     int size;
+    int flag;
     struct QueueNode* next;
 }QueueNode;
 
@@ -30,6 +39,7 @@ void queue_init(Queue* pq)
 
 int queue_size(Queue* pq)
 {
+    pthread_mutex_lock(&g_mutex);
     if (pq == NULL) {
         printf("queue_size pq is null\n");
         return 0;
@@ -41,11 +51,13 @@ int queue_size(Queue* pq)
         cur = cur->next;
         count++;
     }
+    pthread_mutex_unlock(&g_mutex);
     return count;
 }
 
 void queue_pop(Queue* pq)
 {
+    pthread_mutex_lock(&g_mutex);
     if (pq == NULL) {
         printf("queue_pop pq is null\n");
         return;
@@ -62,11 +74,13 @@ void queue_pop(Queue* pq)
         free(pq->head);
         pq->head = next;
     }
+    pthread_mutex_unlock(&g_mutex);
 
 }
 
 void queue_destory(Queue* pq)
 {
+    pthread_mutex_lock(&g_mutex);
     if (pq == NULL) {
         printf("queue_destory pq is null\n");
     }
@@ -77,16 +91,14 @@ void queue_destory(Queue* pq)
         cur = next;
     }
     pq->tail = pq->head = NULL;
+    pthread_mutex_unlock(&g_mutex);
 }
 
-void queue_push(Queue* pq, char* data, int size)
+void queue_push(Queue* pq, char* data, int size,int flag)
 {
+    pthread_mutex_lock(&g_mutex);
     if (pq == NULL) {
         printf("queue_push pq is null\n");
-    }
-
-    while (queue_size(pq) > 40) {
-        queue_pop(pq);
     }
 
     QueueNode* newNode = (QueueNode*)malloc(sizeof(QueueNode));
@@ -96,6 +108,7 @@ void queue_push(Queue* pq, char* data, int size)
     }
     memcpy(newNode->val, data, size);
     newNode->size = size;
+    newNode->flag = flag;
     newNode->next = NULL;
 
     if (pq->tail == NULL) {
@@ -105,6 +118,7 @@ void queue_push(Queue* pq, char* data, int size)
         pq->tail = newNode;
     }
     //printf("增加节点%d   size:%d   %d \n", queue_size(pq), size, strlen(newNode->val));
+    pthread_mutex_unlock(&g_mutex);
 }
 
 int queue_empty(Queue* pq)
@@ -119,22 +133,31 @@ int queue_empty(Queue* pq)
 
 int queue_front(Queue* pq, char** data, int* size)
 {
+    pthread_mutex_lock(&g_mutex);
     if (pq == NULL || pq->head == NULL) {
         printf("queue_front pq or head is null\n");
         return 0;
+    }
+
+    while (queue_size(pq) > 25) {
+        while (pq->head->flag != 1) {
+            queue_pop(pq);
+        }
     }
 
     if (size <= 0)
         return 0;
     *data = pq->head->val;
     *size = pq->head->size;
-
+    pthread_mutex_unlock(&g_mutex);
     return 1;
 }
 
-
-
+#if (defined _WIN32 || defined _WIN64)
 typedef void(*OnBuffer)(unsigned char* data, int size, int w, int h, int pts, int cost_time);
+#else
+typedef void(*OnBuffer)(long data, int size, int w, int h, int pts, int cost_time);
+#endif
 
 AVCodec* codec = NULL;
 AVCodecContext* dec_ctx = NULL;
@@ -146,16 +169,15 @@ OnBuffer decoder_callback = NULL;
 Queue* g_queue;
 clock_t start_time = 0;
 clock_t end_time = 0;
+uint8_t* yuv_buffer = NULL;
+int frame_size = 0;
+int random_giveup = 0;
 
 void output_yuv_buffer(AVFrame* frame) {
-    int width, height, frame_size;
-    uint8_t* yuv_buffer = NULL;
+    int width, height;
     width = frame->width;
     height = frame->height;
-    // 根据格式，获取buffer大小
-    frame_size = av_image_get_buffer_size(frame->format, width, height, 1);
-    // 分配内存
-    yuv_buffer = (uint8_t*)av_mallocz(frame_size * sizeof(uint8_t));
+
     // 将frame数据按照yuv的格式依次填充到bufferr中。下面的步骤可以用工具函数av_image_copy_to_buffer代替。
     int i, j, k;
     // Y
@@ -175,14 +197,14 @@ void output_yuv_buffer(AVFrame* frame) {
             width / 2);
     }
     // 通过之前传入的回调函数发给js
-#ifdef _WIN64
+#if (defined _WIN32 || defined _WIN64)
     int cost_time = (end_time - start_time);
+    decoder_callback(yuv_buffer, frame_size, frame->width, frame->height, frame->pts, cost_time);
 #else
     int cost_time = (end_time - start_time) / 1000;
+    decoder_callback((long)yuv_buffer, frame_size, frame->width, frame->height, frame->pts, cost_time);
 #endif // _WIN64
 
-    decoder_callback(yuv_buffer, frame_size, frame->width, frame->height, frame->pts, cost_time);
-    av_free(yuv_buffer);
 }
 
 int decode_packet(AVCodecContext* ctx, AVFrame* frame, AVPacket* pkt)
@@ -211,7 +233,7 @@ int decode_packet(AVCodecContext* ctx, AVFrame* frame, AVPacket* pkt)
 }
 
 // export interface
-#ifdef _WIN64
+#if (defined _WIN32 || defined _WIN64)
 void init_decoder(OnBuffer callback)
 #else
 void init_decoder(long callback)
@@ -229,12 +251,14 @@ void init_decoder(long callback)
         printf("av_parser_init error\n");
         return;
     }
+    //dec_ctx->thread_count = 4;
     // 初始化上下文
     dec_ctx = avcodec_alloc_context3(codec);
     if (parser_ctx == NULL) {
         printf("avcodec_alloc_context3 error\n");
         return;
     }
+    
     AVDictionary* para = NULL;
     av_dict_set(&para, "preset", "ultrafast", 0);
     av_dict_set(&para, "tune", "zerolatency", 0);
@@ -250,6 +274,9 @@ void init_decoder(long callback)
     // 分配一个pkt内存
     pkt = av_packet_alloc();
     pkt_cache = av_packet_alloc();
+    frame_size = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, 1920, 1080, 1);
+    // 分配内存
+    yuv_buffer = (uint8_t*)av_mallocz(frame_size);
     // 暂存回调
     decoder_callback = (OnBuffer)callback;
     g_queue = (Queue*)malloc(sizeof(Queue));
@@ -260,15 +287,17 @@ void decode_buffer(unsigned char* buffer, int data_size) { // 入参是js传入�
     while (data_size > 0) {
         // 从buffer中解析出packet
         int size = av_parser_parse2(parser_ctx, dec_ctx, &pkt->data, &pkt->size,
-            (char*)buffer, data_size, AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
+            (uint8_t*)buffer, data_size, AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
         if (size < 0) {
             break;
         }
         buffer += size;
         data_size -= size;
+        
         if (pkt->size) {
             // 送进队列
-            queue_push(g_queue, pkt->data, pkt->size);
+            queue_push(g_queue, (char*)pkt->data, pkt->size, pkt->flags);
+            //decode_one_packet();
         }
     }
 }
@@ -279,7 +308,7 @@ void close_decoder() {
         av_parser_close(parser_ctx);
     }
     if (dec_ctx) {
-        avcodec_free_context(&codec);
+        avcodec_free_context(&dec_ctx);
     }
     
     if (pkt_cache) {
@@ -293,7 +322,7 @@ void close_decoder() {
         av_packet_free(&pkt);
     }
 
-
+    av_free(yuv_buffer);
     decoder_callback = NULL;
 
     queue_destory(g_queue);
@@ -305,7 +334,7 @@ int decode_one_packet()
     if (queue_size(g_queue) == 0)
         return 0;
 
-    if (queue_front(g_queue, &pkt_cache->data, &pkt_cache->size)) {
+    if (queue_front(g_queue, (char**)&pkt_cache->data, &pkt_cache->size)) {
         // 解码packet
         decode_packet(dec_ctx, frame, pkt_cache);
 
@@ -318,21 +347,16 @@ int decode_one_packet()
 
 FILE* output = NULL;
 void deal_buffer(unsigned char* data, int size, int w, int h, int pts, int cost_time) {
+    if(cost_time > 30)
+        printf("%d*%d size:%d   pts:%d  cost_time:%d  \n", w, h, size, pts, cost_time);
 
-    printf("%d*%d size:%d   pts:%d  cost_time:%d  \n", w, h, size, pts, cost_time);
-
-    int res = fwrite(data, size, 1, output);
-    if (res < size) {
-        printf("write file error\n");
-    }
     return;
 
 }
 
 int main(int argc, char* argv[])
 {
-    return 0;
-#ifdef _WIN64
+#if (defined _WIN32 || defined _WIN64)
     init_decoder(deal_buffer);
 #else
     return 0;
@@ -352,29 +376,34 @@ int main(int argc, char* argv[])
     }
 
     size_t data_size = 0;
-    char* buffer = (char*)malloc(sizeof(char) * (data_chunk + AV_INPUT_BUFFER_PADDING_SIZE));
+    unsigned char* buffer = (unsigned char*)malloc(sizeof(char) * (data_chunk + AV_INPUT_BUFFER_PADDING_SIZE));
 
+    //thread costCache([]() {
+    //    while (1) {
+    //        decode_one_packet();
+    //    }
+    //});
+    
     while (!feof(input)) {
         /* read raw data from the input file */
         if (buffer)
             data_size = fread(buffer, 1, data_chunk, input);
 
-        if (!data_size) {
+        if (data_size < 4096) {
+            fseek(input, 0, SEEK_SET);
             printf("文件读取结束\n");
-            break;
+            static int  flag = 1;
+            if (flag) {
+                //costCache.detach();
+                flag = 0;
+            }
+
+           // break;
         }
 
         /* use the parser to split the data into frames */
         //data = inbuf;
         decode_buffer(buffer, data_size);
-    }
-
-    while (1) {
-        int res = decode_one_packet();
-        if (!res)
-            break;
-        //Sleep(40);
-
     }
 
     fclose(input);
