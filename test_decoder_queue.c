@@ -7,11 +7,7 @@
 #include <libavutil/imgutils.h>
 
 #if (defined _WIN32 || defined _WIN64)
-#include <Windows.h>
-#include <thread>
-#include <mutex>
-using namespace std;
-recursive_mutex mtx;
+
 #else
 
 #include <pthread.h>
@@ -39,7 +35,9 @@ void queue_init(Queue* pq)
 
 int queue_size(Queue* pq)
 {
+#ifdef __linux__
     pthread_mutex_lock(&g_mutex);
+#endif
     if (pq == NULL) {
         printf("queue_size pq is null\n");
         return 0;
@@ -51,13 +49,17 @@ int queue_size(Queue* pq)
         cur = cur->next;
         count++;
     }
+#ifdef __linux__
     pthread_mutex_unlock(&g_mutex);
+#endif
     return count;
 }
 
 void queue_pop(Queue* pq)
 {
+#ifdef __linux__
     pthread_mutex_lock(&g_mutex);
+#endif
     if (pq == NULL) {
         printf("queue_pop pq is null\n");
         return;
@@ -74,13 +76,17 @@ void queue_pop(Queue* pq)
         free(pq->head);
         pq->head = next;
     }
+#ifdef __linux__
     pthread_mutex_unlock(&g_mutex);
+#endif
 
 }
 
 void queue_destory(Queue* pq)
 {
+#ifdef __linux__
     pthread_mutex_lock(&g_mutex);
+#endif
     if (pq == NULL) {
         printf("queue_destory pq is null\n");
     }
@@ -91,12 +97,16 @@ void queue_destory(Queue* pq)
         cur = next;
     }
     pq->tail = pq->head = NULL;
+#ifdef __linux__
     pthread_mutex_unlock(&g_mutex);
+#endif
 }
 
 void queue_push(Queue* pq, char* data, int size,int flag)
 {
+#ifdef __linux__
     pthread_mutex_lock(&g_mutex);
+#endif
     if (pq == NULL) {
         printf("queue_push pq is null\n");
     }
@@ -118,7 +128,9 @@ void queue_push(Queue* pq, char* data, int size,int flag)
         pq->tail = newNode;
     }
     //printf("增加节点%d   size:%d   %d \n", queue_size(pq), size, strlen(newNode->val));
+#ifdef __linux__
     pthread_mutex_unlock(&g_mutex);
+#endif
 }
 
 int queue_empty(Queue* pq)
@@ -133,7 +145,9 @@ int queue_empty(Queue* pq)
 
 int queue_front(Queue* pq, char** data, int* size)
 {
+#ifdef __linux__
     pthread_mutex_lock(&g_mutex);
+#endif
     if (pq == NULL || pq->head == NULL) {
         printf("queue_front pq or head is null\n");
         return 0;
@@ -149,7 +163,9 @@ int queue_front(Queue* pq, char** data, int* size)
         return 0;
     *data = pq->head->val;
     *size = pq->head->size;
+#ifdef __linux__
     pthread_mutex_unlock(&g_mutex);
+#endif
     return 1;
 }
 
@@ -254,7 +270,7 @@ void init_decoder(long callback)
     //dec_ctx->thread_count = 4;
     // 初始化上下文
     dec_ctx = avcodec_alloc_context3(codec);
-    if (parser_ctx == NULL) {
+    if (dec_ctx == NULL) {
         printf("avcodec_alloc_context3 error\n");
         return;
     }
@@ -326,6 +342,7 @@ void close_decoder() {
     decoder_callback = NULL;
 
     queue_destory(g_queue);
+    free(g_queue);
 }
 
 int decode_one_packet()
@@ -377,12 +394,6 @@ int main(int argc, char* argv[])
 
     size_t data_size = 0;
     unsigned char* buffer = (unsigned char*)malloc(sizeof(char) * (data_chunk + AV_INPUT_BUFFER_PADDING_SIZE));
-
-    //thread costCache([]() {
-    //    while (1) {
-    //        decode_one_packet();
-    //    }
-    //});
     
     while (!feof(input)) {
         /* read raw data from the input file */
