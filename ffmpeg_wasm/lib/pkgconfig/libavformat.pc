@@ -1,0 +1,14 @@
+prefix=/home/ubuntu/ffmpeg/../open_decoder_wasm/ffmpeg_wasm
+exec_prefix=${prefix}
+libdir=/home/ubuntu/ffmpeg/../open_decoder_wasm/ffmpeg_wasm/lib
+includedir=/home/ubuntu/ffmpeg/../open_decoder_wasm/ffmpeg_wasm/include
+
+Name: libavformat
+Description: FFmpeg container format library
+Version: 59.34.101
+Requires: libavcodec >= 59.50.101, libavutil >= 57.39.101
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lavformat -lm
+Libs.private: 
+Cflags: -I${includedir}

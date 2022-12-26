@@ -1,0 +1,14 @@
+prefix=/home/ubuntu/ffmpeg/../open_decoder_wasm/ffmpeg_wasm
+exec_prefix=${prefix}
+libdir=/home/ubuntu/ffmpeg/../open_decoder_wasm/ffmpeg_wasm/lib
+includedir=/home/ubuntu/ffmpeg/../open_decoder_wasm/ffmpeg_wasm/include
+
+Name: libavutil
+Description: FFmpeg utility library
+Version: 57.39.101
+Requires: 
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lavutil -pthread -lm -lX11
+Libs.private: 
+Cflags: -I${includedir}
